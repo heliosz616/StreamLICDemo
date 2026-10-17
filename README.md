@@ -1,6 +1,6 @@
 # StreamLICDemo
 
-This repository accompanies **[StreamLIC: A Lightweight Learned Image Compression Model for Stream Processing on FPGA](https://doi.org/10.1109/VCIP67698.2025.11396907)**, VCIP 2025. It provides the quantization-aware model, parameter export tools, an integer golden reference, and a runnable Alveo U50 demo for research and engineering evaluation.
+This repository provides a demo of **[StreamLIC: A Lightweight Learned Image Compression Model for Stream Processing on FPGA](https://doi.org/10.1109/VCIP67698.2025.11396907)**, VCIP 2025. It provides the quantization-aware model, parameter export tools, an integer golden reference, and a runnable Alveo U50 demo for research and engineering evaluation.
 
 The workflow covers model training and quantization, export of integer parameters and entropy tables, and image encoding and reconstruction. The supplied weights and FPGA images support evaluation of bitrate, RGB PSNR, latency and throughput.
 

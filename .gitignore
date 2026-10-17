@@ -1,0 +1,10 @@
+outputs/
+build/
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+training/checkpoints/
+training/data/
+.env
+.env.*

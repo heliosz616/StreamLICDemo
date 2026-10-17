@@ -1,0 +1,357 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+prebuilt="$root/runtime"
+default_parameters="$prebuilt/parameters"
+default_encoder_host="$prebuilt/bin/streamlic_encoder_host"
+default_decoder_host="$prebuilt/bin/streamlic_fpga_decoder"
+default_xrt_settings=${STREAMLIC_XRT_SETUP:-/opt/xilinx/xrt/setup.sh}
+
+die() {
+  echo "streamlic: $*" >&2
+  exit 2
+}
+
+usage() {
+  cat <<'EOF'
+StreamLIC Demo
+
+Usage:
+  ./streamlic doctor [--device N] [--xrt-settings FILE]
+  ./streamlic encode INPUT.{png,ppm} OUTPUT.slc [OPTIONS]
+  ./streamlic decode INPUT.slc OUTPUT.png [OPTIONS]
+  ./streamlic benchmark encode INPUT_DIR OUTPUT_DIR [OPTIONS]
+  ./streamlic benchmark decode INPUT_DIR OUTPUT_DIR [OPTIONS]
+
+Common runtime options:
+  --device N                 XRT device index (default: 0)
+  --xrt-settings FILE        XRT setup script
+  --model-package DIR        Directory containing encoder/, fpga_decoder/
+                             and cdf_p24.bin
+  --xclbin FILE              Override the selected FPGA image
+  --host FILE                Override the selected prebuilt host executable
+
+Run './streamlic <command> --help' for command-specific options.
+EOF
+}
+
+positive_integer() {
+  [[ $2 =~ ^[1-9][0-9]*$ ]] || die "$1 must be a positive integer"
+}
+
+nonnegative_integer() {
+  [[ $2 =~ ^[0-9]+$ ]] || die "$1 must be a nonnegative integer"
+}
+
+activate_xrt() {
+  local settings=$1
+  if [[ -f $settings ]]; then
+    # XRT 2.13 setup.sh references optional variables that may be unset.
+    set +u
+    source "$settings" >/dev/null
+    set -u
+  elif ! command -v xbutil >/dev/null 2>&1; then
+    die "XRT is not active and setup script was not found: $settings"
+  fi
+}
+
+require_file() {
+  [[ -f $1 ]] || die "$2 was not found: $1"
+}
+
+require_directory() {
+  [[ -d $1 ]] || die "$2 was not found: $1"
+}
+
+require_option_value() {
+  (($# >= 2)) || die "$1 requires a value"
+}
+
+command_doctor() {
+  local device=0 xrt_settings=$default_xrt_settings
+  while (($#)); do
+    case $1 in
+      --device) (($# >= 2)) || die "--device requires a value"; device=$2; shift 2 ;;
+      --xrt-settings) (($# >= 2)) || die "--xrt-settings requires a file"; xrt_settings=$2; shift 2 ;;
+      --help|-h)
+        echo "Usage: ./streamlic doctor [--device N] [--xrt-settings FILE]"
+        return ;;
+      *) die "unknown doctor option: $1" ;;
+    esac
+  done
+  nonnegative_integer device "$device"
+  activate_xrt "$xrt_settings"
+  command -v xbutil >/dev/null 2>&1 || die "xbutil is unavailable after XRT setup"
+  require_file "$default_encoder_host" "prebuilt encoder host"
+  require_file "$default_decoder_host" "prebuilt decoder host"
+  require_file "$prebuilt/xclbin/streamlic_encoder.xclbin" "encoder xclbin"
+  require_file "$prebuilt/xclbin/streamlic_decoder.xclbin" "decoder xclbin"
+  require_directory "$default_parameters/encoder" "encoder parameter package"
+  require_directory "$default_parameters/fpga_decoder" "FPGA decoder parameter package"
+  local device_list selected_device
+  device_list=$(timeout 15 xbutil examine 2>&1) ||
+    die "XRT could not list devices within 15 seconds"
+  selected_device=$(grep -E '^[[:space:]]*\[[[:xdigit:]:.]+\]' <<<"$device_list" |
+    sed -n "$((device + 1))p")
+  [[ -n $selected_device ]] || die "XRT device index $device was not found"
+  grep -qi 'xilinx_u50' <<<"$selected_device" ||
+    die "device $device is not an Alveo U50"
+  echo "StreamLIC runtime is ready on XRT device $device."
+}
+
+command_encode() {
+  if [[ ${1:-} == --help || ${1:-} == -h ]]; then
+    cat <<'EOF'
+Usage: ./streamlic encode INPUT.{png,ppm} OUTPUT.slc [OPTIONS]
+  --device N             XRT device index (default: 0)
+  --slots N              resident frame-buffer sets (default: 1)
+  --batch-size N         frames per kernel transaction (default: 1)
+  --codec-workers N      CPU frame-coding workers (default: 1)
+  --model-package DIR    matching runtime parameter package
+  --xclbin FILE          encoder FPGA image
+  --host FILE            encoder host executable
+  --xrt-settings FILE    XRT setup script
+
+The .slc format always uses four independent y arithmetic streams.
+EOF
+    return
+  fi
+  (($# >= 2)) || die "encode requires an input image and output bitstream"
+  local input=$1 output=$2
+  shift 2
+  local device=0 slots=1 batch=1 codec_workers=1
+  local model_package=$default_parameters host=$default_encoder_host
+  local xclbin="$prebuilt/xclbin/streamlic_encoder.xclbin"
+  local xrt_settings=$default_xrt_settings
+  while (($#)); do
+    case $1 in
+      --device) require_option_value "$@"; device=$2; shift 2 ;;
+      --slots) require_option_value "$@"; slots=$2; shift 2 ;;
+      --batch-size) require_option_value "$@"; batch=$2; shift 2 ;;
+      --codec-workers) require_option_value "$@"; codec_workers=$2; shift 2 ;;
+      --model-package) require_option_value "$@"; model_package=$2; shift 2 ;;
+      --xclbin) require_option_value "$@"; xclbin=$2; shift 2 ;;
+      --host) require_option_value "$@"; host=$2; shift 2 ;;
+      --xrt-settings) require_option_value "$@"; xrt_settings=$2; shift 2 ;;
+      *) die "unknown encode option: $1" ;;
+    esac
+  done
+  nonnegative_integer device "$device"
+  positive_integer slots "$slots"
+  positive_integer batch-size "$batch"
+  positive_integer codec-workers "$codec_workers"
+  require_file "$input" "input image"
+  require_file "$host" "encoder host"
+  require_file "$xclbin" "encoder xclbin"
+  require_directory "$model_package/encoder" "encoder parameter package"
+  require_file "$model_package/cdf_p24.bin" "CDF bundle"
+  activate_xrt "$xrt_settings"
+  exec "$host" --xclbin "$xclbin" \
+    --parameters "$model_package/encoder" --cdf "$model_package/cdf_p24.bin" \
+    --device "$device" --slots "$slots" \
+    --batch-size "$batch" --codec-workers "$codec_workers" \
+    --image "$input" --output "$output"
+}
+
+command_decode() {
+  if [[ ${1:-} == --help || ${1:-} == -h ]]; then
+    cat <<'EOF'
+Usage: ./streamlic decode INPUT.slc OUTPUT.png [OPTIONS]
+  --original IMAGE       compute RGB PSNR against this PNG/PPM
+  --report FILE          write JSON timing, bitrate and quality results
+  --frame-timings        include per-frame results in the report
+  --device N             XRT device index (default: 0)
+  --slots N              resident frame-buffer sets (default: 1)
+  --png-workers N        PNG output workers (default: 1)
+  --png-compression N    lossless compression level 0..9 (default: 1)
+  --timeout-ms N         per-command FPGA deadline (default: 60000)
+  --model-package DIR    matching runtime parameter package
+  --xclbin FILE          decoder FPGA image
+  --host FILE            FPGA decoder host executable
+  --xrt-settings FILE    XRT setup script
+EOF
+    return
+  fi
+  (($# >= 2)) || die "decode requires an input bitstream and output PNG"
+  local input=$1 output=$2
+  shift 2
+  local device=0 slots=1 png_workers=1 png_compression=1 timeout_ms=60000
+  local model_package=$default_parameters host=$default_decoder_host
+  local xclbin="$prebuilt/xclbin/streamlic_decoder.xclbin"
+  local xrt_settings=$default_xrt_settings original= report=
+  local frame_timings=0
+  while (($#)); do
+    case $1 in
+      --original) require_option_value "$@"; original=$2; shift 2 ;;
+      --report) require_option_value "$@"; report=$2; shift 2 ;;
+      --frame-timings) frame_timings=1; shift ;;
+      --device) require_option_value "$@"; device=$2; shift 2 ;;
+      --slots) require_option_value "$@"; slots=$2; shift 2 ;;
+      --png-workers) require_option_value "$@"; png_workers=$2; shift 2 ;;
+      --png-compression) require_option_value "$@"; png_compression=$2; shift 2 ;;
+      --timeout-ms) require_option_value "$@"; timeout_ms=$2; shift 2 ;;
+      --model-package) require_option_value "$@"; model_package=$2; shift 2 ;;
+      --xclbin) require_option_value "$@"; xclbin=$2; shift 2 ;;
+      --host) require_option_value "$@"; host=$2; shift 2 ;;
+      --xrt-settings) require_option_value "$@"; xrt_settings=$2; shift 2 ;;
+      *) die "unknown decode option: $1" ;;
+    esac
+  done
+  nonnegative_integer device "$device"
+  positive_integer slots "$slots"
+  positive_integer png-workers "$png_workers"
+  nonnegative_integer png-compression "$png_compression"
+  ((png_compression <= 9)) || die "png-compression must be between 0 and 9"
+  positive_integer timeout-ms "$timeout_ms"
+  require_file "$input" "input bitstream"
+  require_file "$host" "FPGA decoder host"
+  require_file "$xclbin" "decoder xclbin"
+  require_directory "$model_package/fpga_decoder" "FPGA decoder parameter package"
+  [[ -z $original ]] || require_file "$original" "original image"
+  activate_xrt "$xrt_settings"
+  local args=(--xclbin "$xclbin"
+    --parameters "$model_package/fpga_decoder" --device "$device"
+    --slots "$slots" --png-workers "$png_workers"
+    --png-compression "$png_compression" --timeout-ms "$timeout_ms"
+    --bitstream "$input" --output "$output")
+  [[ -z $original ]] || args+=(--original "$original")
+  [[ -z $report ]] || args+=(--report "$report")
+  ((frame_timings == 0)) || args+=(--frame-timings)
+  exec "$host" "${args[@]}"
+}
+
+command_benchmark_encode() {
+  if [[ ${1:-} == --help || ${1:-} == -h ]]; then
+    echo "Usage: ./streamlic benchmark encode INPUT_DIR OUTPUT_DIR [--count N] [--device N] [--device-bdf BDF] [--slots N] [--batch-size N] [--codec-workers N] [--timeout-seconds N]"
+    return
+  fi
+  (($# >= 2)) || die "benchmark encode requires input and output directories"
+  local input_dir=$1 output_dir=$2
+  shift 2
+  local count=64 device=0 slots=4 batch=4 codec_workers=4 timeout=300
+  local model_package=$default_parameters host=$default_encoder_host
+  local xclbin="$prebuilt/xclbin/streamlic_encoder.xclbin"
+  local xrt_settings=$default_xrt_settings device_bdf=
+  while (($#)); do
+    case $1 in
+      --count) require_option_value "$@"; count=$2; shift 2 ;;
+      --device) require_option_value "$@"; device=$2; shift 2 ;;
+      --device-bdf) require_option_value "$@"; device_bdf=$2; shift 2 ;;
+      --slots) require_option_value "$@"; slots=$2; shift 2 ;;
+      --batch-size) require_option_value "$@"; batch=$2; shift 2 ;;
+      --codec-workers) require_option_value "$@"; codec_workers=$2; shift 2 ;;
+      --timeout-seconds) require_option_value "$@"; timeout=$2; shift 2 ;;
+      --model-package) require_option_value "$@"; model_package=$2; shift 2 ;;
+      --xclbin) require_option_value "$@"; xclbin=$2; shift 2 ;;
+      --host) require_option_value "$@"; host=$2; shift 2 ;;
+      --xrt-settings) require_option_value "$@"; xrt_settings=$2; shift 2 ;;
+      --help|-h)
+        echo "Usage: ./streamlic benchmark encode INPUT_DIR OUTPUT_DIR [--count N] [--device N] [--device-bdf BDF] [--slots N] [--batch-size N] [--codec-workers N] [--timeout-seconds N]"
+        return ;;
+      *) die "unknown encoder benchmark option: $1" ;;
+    esac
+  done
+  nonnegative_integer device "$device"
+  positive_integer count "$count"
+  positive_integer slots "$slots"
+  positive_integer batch-size "$batch"
+  positive_integer codec-workers "$codec_workers"
+  positive_integer timeout-seconds "$timeout"
+  require_directory "$input_dir" "input image directory"
+  require_file "$host" "encoder host"
+  require_file "$xclbin" "encoder xclbin"
+  require_directory "$model_package/encoder" "encoder parameter package"
+  require_file "$model_package/cdf_p24.bin" "CDF bundle"
+  local args=(--xclbin "$xclbin"
+    --parameters "$model_package/encoder" --cdf "$model_package/cdf_p24.bin"
+    --input-dir "$input_dir" --output-dir "$output_dir" --count "$count"
+    --device "$device" --slots "$slots"
+    --batch-size "$batch" --codec-workers "$codec_workers"
+    --timeout-seconds "$timeout")
+  [[ -z $device_bdf ]] || args+=(--device-bdf "$device_bdf")
+  STREAMLIC_HOST_BINARY=$host STREAMLIC_XRT_SETUP=$xrt_settings \
+    bash "$root/scripts/benchmark_encoder.sh" "${args[@]}"
+}
+
+command_benchmark_decode() {
+  if [[ ${1:-} == --help || ${1:-} == -h ]]; then
+    echo "Usage: ./streamlic benchmark decode INPUT_DIR OUTPUT_DIR [--original-dir DIR] [--report FILE] [--no-png] [--device N] [--slots N] [--png-workers N] [--png-compression N] [--timeout-ms N]"
+    return
+  fi
+  (($# >= 2)) || die "benchmark decode requires input and output directories"
+  local input_dir=$1 output_dir=$2
+  shift 2
+  local device=0 slots=6 png_workers=4 png_compression=1 timeout_ms=60000
+  local model_package=$default_parameters host=$default_decoder_host
+  local xclbin="$prebuilt/xclbin/streamlic_decoder.xclbin"
+  local xrt_settings=$default_xrt_settings original_dir= report= no_png=0
+  while (($#)); do
+    case $1 in
+      --original-dir) require_option_value "$@"; original_dir=$2; shift 2 ;;
+      --report) require_option_value "$@"; report=$2; shift 2 ;;
+      --no-png) no_png=1; shift ;;
+      --device) require_option_value "$@"; device=$2; shift 2 ;;
+      --slots) require_option_value "$@"; slots=$2; shift 2 ;;
+      --png-workers) require_option_value "$@"; png_workers=$2; shift 2 ;;
+      --png-compression) require_option_value "$@"; png_compression=$2; shift 2 ;;
+      --timeout-ms) require_option_value "$@"; timeout_ms=$2; shift 2 ;;
+      --model-package) require_option_value "$@"; model_package=$2; shift 2 ;;
+      --xclbin) require_option_value "$@"; xclbin=$2; shift 2 ;;
+      --host) require_option_value "$@"; host=$2; shift 2 ;;
+      --xrt-settings) require_option_value "$@"; xrt_settings=$2; shift 2 ;;
+      --help|-h)
+        echo "Usage: ./streamlic benchmark decode INPUT_DIR OUTPUT_DIR [--original-dir DIR] [--report FILE] [--no-png] [--device N] [--slots N] [--png-workers N] [--png-compression N] [--timeout-ms N]"
+        return ;;
+      *) die "unknown decoder benchmark option: $1" ;;
+    esac
+  done
+  nonnegative_integer device "$device"
+  positive_integer slots "$slots"
+  positive_integer png-workers "$png_workers"
+  nonnegative_integer png-compression "$png_compression"
+  ((png_compression <= 9)) || die "png-compression must be between 0 and 9"
+  positive_integer timeout-ms "$timeout_ms"
+  require_directory "$input_dir" "bitstream directory"
+  require_file "$host" "FPGA decoder host"
+  require_file "$xclbin" "decoder xclbin"
+  require_directory "$model_package/fpga_decoder" "FPGA decoder parameter package"
+  [[ -z $original_dir ]] || require_directory "$original_dir" "original-image directory"
+  activate_xrt "$xrt_settings"
+  local args=(--xclbin "$xclbin"
+    --parameters "$model_package/fpga_decoder" --device "$device"
+    --slots "$slots" --png-workers "$png_workers"
+    --png-compression "$png_compression" --timeout-ms "$timeout_ms"
+    --input-dir "$input_dir")
+  if ((no_png)); then args+=(--no-png); else args+=(--output-dir "$output_dir"); fi
+  [[ -z $original_dir ]] || args+=(--original-dir "$original_dir")
+  [[ -z $report ]] || args+=(--report "$report")
+  exec "$host" "${args[@]}"
+}
+
+command_benchmark() {
+  local kind=${1:-}
+  [[ -n $kind ]] || die "benchmark requires encode or decode"
+  if [[ $kind == --help || $kind == -h ]]; then
+    echo "Usage: ./streamlic benchmark encode|decode ..."
+    return
+  fi
+  shift
+  case $kind in
+    encode) command_benchmark_encode "$@" ;;
+    decode) command_benchmark_decode "$@" ;;
+    *) die "benchmark kind must be encode or decode" ;;
+  esac
+}
+
+command=${1:-}
+[[ -n $command ]] || { usage; exit 0; }
+shift
+case $command in
+  --help|-h|help) usage ;;
+  doctor) command_doctor "$@" ;;
+  encode) command_encode "$@" ;;
+  decode) command_decode "$@" ;;
+  benchmark) command_benchmark "$@" ;;
+  *) die "unknown command: $command (run './streamlic --help')" ;;
+esac

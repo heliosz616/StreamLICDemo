@@ -1,0 +1,10 @@
+* text=auto eol=lf
+*.sh text eol=lf
+streamlic text eol=lf
+Makefile text eol=lf
+*.bin binary
+*.xclbin binary
+*.png binary
+runtime/bin/* binary
+*.pt binary
+*.npy binary

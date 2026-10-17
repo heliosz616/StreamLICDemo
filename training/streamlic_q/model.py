@@ -7,7 +7,7 @@ from .qat_utils import Conv2dQ, LAGC_Q, FGPConv_Q, Conv2dUpsample_Q,SimpleChanne
 from compressai.entropy_models import EntropyBottleneck, GaussianConditional
 import math
 
-from .base import (
+from compressai.models.base import (
     CompressionModel,
     get_scale_table
 )

@@ -1,0 +1,50 @@
+{
+  "format": 1,
+  "platform": "xilinx_u50_gen3x16_xdma_5_202210_1",
+  "part": "xcu50-fsvh2104-2-e",
+  "vitis_version": "2022.1",
+  "tested_xrt_version": "2.13.466",
+  "width": 1280,
+  "height": 768,
+  "channels": 3,
+  "weight_bits": 12,
+  "activation_bits": 12,
+  "cdf_precision": 24,
+  "slc_header_bytes": 18,
+  "y_entropy_streams": 4,
+  "encoder": {
+    "file": "xclbin/streamlic_encoder.xclbin",
+    "uuid": "29d84635-4572-82d5-c879-4bbed11a5cc5",
+    "clock_mhz": {
+      "streamlic_analysis": 185,
+      "streamlic_hyper": 175,
+      "streamlic_ape": 175
+    },
+    "routed_kernel_resources": {
+      "dsp": 3447,
+      "ff": 347466,
+      "lut": 277337,
+      "bram36": 575,
+      "uram": 388
+    },
+    "parameters": "parameters/encoder"
+  },
+  "decoder": {
+    "file": "xclbin/streamlic_decoder.xclbin",
+    "uuid": "91694456-1927-b63b-2d9d-884da78e8a15",
+    "clock_mhz": {
+      "streamlic_decode_hyper": 175,
+      "streamlic_decode_y": 175,
+      "streamlic_synthesis": 200
+    },
+    "routed_kernel_resources": {
+      "dsp": 3320,
+      "ff": 314229,
+      "lut": 241900,
+      "bram36": 805.5,
+      "uram": 329
+    },
+    "parameters": "parameters/fpga_decoder"
+  },
+  "host_architecture": "x86_64"
+}

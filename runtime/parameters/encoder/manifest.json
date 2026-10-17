@@ -1,0 +1,67 @@
+{
+  "format": 1,
+  "model_sha256": "4b7274f06efda25670ccaf03b187d08f39c75e76a3e0015530b4c2d1a17d45ed",
+  "cdf_sha256": "dfbc0b196a1ec025004f01d774fa9ba67dd516b5cd44faef24b72c4e0c5d990b",
+  "cdf_precision": 24,
+  "transport": {
+    "weights": "signed W12 sign-extended in little-endian int16 lanes",
+    "activations": "signed A12 sign-extended in little-endian int16 lanes",
+    "scales": "little-endian uint32: bits[15:0]=parameter, bits[21:16]=shift",
+    "biases": "little-endian signed int16"
+  },
+  "counts": {
+    "analysis": {
+      "weights": 1009152,
+      "scales": 1536,
+      "biases": 1200
+    },
+    "hyper": {
+      "weights": 2396160,
+      "scales": 3168,
+      "biases": 3168
+    },
+    "ape": {
+      "weights": 221184,
+      "scales": 1152,
+      "biases": 4480
+    }
+  },
+  "files": {
+    "analysis_weights_i16.bin": {
+      "bytes": 2018304,
+      "sha256": "b15a6161fc5c69f16b73c0833df35dc6197f08a8da4ab165952d15938613ed22"
+    },
+    "analysis_scales_u32.bin": {
+      "bytes": 6144,
+      "sha256": "ab765510bc15fad4f511272cb3a5ea6b357acc5f10ffa1de18f0eb0d41b7e2ec"
+    },
+    "analysis_biases_i16.bin": {
+      "bytes": 2400,
+      "sha256": "1d1a21a067a8c9e5c7f380f73668e2617158784820af322424a1c619c1cbc466"
+    },
+    "hyper_weights_i16.bin": {
+      "bytes": 4792320,
+      "sha256": "2e92f1da82efed29f70e578b6a3d2d326e4d3aea721d29a2b47fc5a23177e52e"
+    },
+    "hyper_scales_u32.bin": {
+      "bytes": 12672,
+      "sha256": "44a1cba752aaa47f9a5047746f245212eacdbb4752dc039f4417927c5586672e"
+    },
+    "hyper_biases_i16.bin": {
+      "bytes": 6336,
+      "sha256": "4aeb66b9305d074689f3c9d0416dccf7053cced0d7ea8b5d166f3b0bcce4c20d"
+    },
+    "ape_weights_i16.bin": {
+      "bytes": 442368,
+      "sha256": "22614f6bcdbde629fbebc90280a17ca2d2ed73e1b5052986a9cbd6073d17be64"
+    },
+    "ape_scales_u32.bin": {
+      "bytes": 4608,
+      "sha256": "a379e85b05684ffeb049b962284aa9c58e0c5c25481ba9899e74387593936535"
+    },
+    "ape_biases_i16.bin": {
+      "bytes": 8960,
+      "sha256": "9c8d5a29b729aafcc3bd372123119b72b74a294d41a6035e16ba2c0300888b4d"
+    }
+  }
+}

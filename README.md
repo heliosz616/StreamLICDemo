@@ -1,130 +1,86 @@
-# StreamLIC-Quantized-Implementation
-Pytorch implementation of StreamLIC in VCIP2025 paper "StreamLIC: A Lightweight Learned Image Compression  Model for Stream Processing on FPGA"
+# StreamLIC: Quantized Model and U50 Demo
 
+StreamLIC is a learned image compression system designed for stream processing on FPGA. This repository provides an Alveo U50 encoder and decoder, Linux host applications, matched model parameters and entropy tables, and the quantization-aware model used for training experiments.
 
+The encoder produces `.slc` bitstreams from RGB images. Neural transforms and autoregressive parameter estimation execute on the FPGA; the host performs arithmetic encoding and bitstream assembly. The decoder combines host-side hyperlatent decoding with FPGA entropy decoding and image synthesis.
 
-## Features
-*   **Sparsity:** Uses Fine-Grained Pruning (FGPConv) to reduce computational complexity.
-*   **Quantization:** Full Quantization-Aware Training (QAT) support for weights and activations, simulating fixed-point hardware behavior.
-*   **Adaptive PDF Table:** Replaces standard continuous probability models with `RectifiedPDF`, a discrete lookup-table-based approach for more accurate probability modeling.
-*   **Parameter Export:** Utilities to export integerized parameters (weights, biases, scale factors) for HLS/FPGA implementation.
+This demo supports research and engineering evaluation of StreamLIC on the Alveo U50. It provides an end-to-end workflow for encoding images, reconstructing them from compressed bitstreams, and measuring bitrate, reconstruction quality, latency and throughput. The supplied FPGA images and model parameters define the configuration used for these experiments.
 
-## Requirements
+## Hardware and software
 
-*   Python 3.x
-*   [PyTorch](https://pytorch.org/)
-*   [CompressAI](https://github.com/InterDigitalInc/CompressAI)
+| Item | Configuration |
+|---|---|
+| Accelerator | AMD/Xilinx Alveo U50 |
+| Platform | `xilinx_u50_gen3x16_xdma_5_202210_1` |
+| Host | Linux x86-64 |
+| FPGA build toolchain | Vitis 2022.1 |
+| Reference XRT version | 2.13.466 |
+| Input | 1280 × 768, 8-bit RGB PNG or binary P6 PPM |
+| Quantization | 12-bit weights and activations |
+| Entropy tables | 24-bit CDF precision |
 
+Install the U50 platform and a compatible XRT runtime before running the demo. The supplied host binaries require `libxrt_coreutil.so.2`, `libpng16.so.16`, the GNU C++ runtime and standard Linux libraries. The decoder also requires `libcrypto.so.1.1`; install the OpenSSL 1.1 runtime library on the host. Vitis is not needed to run the supplied FPGA images.
 
-## Model Architecture
+## Quick start
 
-The model follows a hyperprior architecture with autoregressive context (AR). It utilizes custom layers found in `qat_utils.py`:
-*   **Conv2dQ / Conv2dUpsample_Q:** Quantized convolution and upsampling.
-*   **LAGC_Q:** Locally Adaptive Gain Control with quantization.
-*   **FGPConv_Q:** Fine-Grained Pruning Convolution for sparse layers.
-
-## Training Workflow
-
-The training strategy is designed to transition the model from a continuous floating-point representation to a fixed-point, sparse, integer-aligned representation.
-
-### 1. AUN / Initial Training
-Start with standard training using additive uniform noise (AUN) for quantization simulation. Ensure QAT and Masking are disabled initially to let the model converge.
-
-```python
-model = ARLiteSparse_Q()
-model.train()
-model.toggle_quantization(False)
-model.toggle_mask(False)
-# ... Run standard training loop ...
+```bash
+git clone https://github.com/heliosz616/StreamLIC-Quantized-Implementation.git
+cd StreamLIC-Quantized-Implementation
+./streamlic doctor
+mkdir -p outputs
+./streamlic encode examples/test_pattern.png outputs/test.slc
+./streamlic decode outputs/test.slc outputs/reconstruction.png \
+  --original examples/test_pattern.png --report outputs/result.json
 ```
 
-### 2. Sparsity Masking
-Once the model has converged, calculate the sparsity masks based on activation statistics and enable them.
+The example is a synthetic test pattern. Prepare inputs at 1280 × 768. Encoding and decoding program different FPGA images and should run sequentially on a shared device.
 
-```python
-# Calculate masks based on statistics collected
-model.set_all_mask() 
+Use `--device N` to select an XRT device and `--xrt-settings FILE` for a non-default XRT setup script. Each command provides `--help`. Use the supplied FPGA images with their matching encoder parameters, decoder parameters and CDF bundle.
 
-# Enable the mask (sparse inference simulation)
-model.toggle_mask(True) 
-# ... Continue training to recover accuracy ...
+## Repository layout
+
+```text
+streamlic                 Runtime command-line entry point
+runtime/bin/              Linux x86-64 host executables
+runtime/xclbin/           Encoder and decoder FPGA images
+runtime/parameters/       Matched weights, scales, biases and CDF tables
+runtime/manifest.json     Hardware, ABI and model configuration
+scripts/                  Runtime benchmark script
+models/                   Quantized model archive and PDF parameters
+training/                 QAT model, integer reference and parameter export
+examples/                 Synthetic RGB input
 ```
 
-### 3. Quantization-Aware Training (QAT)
-Enable quantization for weights and activations. This simulates the rounding effects of fixed-point arithmetic.
+## Training and quantization
 
-```python
-model.toggle_quantization(True)
-# ... Continue training ...
+See [training/README.md](training/README.md) for the PyTorch model, quantization controls, parameter export and golden reference workflow. The Python tools run independently of XRT using the supplied quantized model archive.
+
+## Evaluation
+
+For a directory containing at least 64 supported images:
+
+```bash
+./streamlic benchmark encode images outputs/encoded --count 64
+./streamlic benchmark decode outputs/encoded outputs/decoded \
+  --original-dir images --report outputs/benchmark.json
 ```
 
-### 4. Hard Quantization (Fix Encoder)
-To prepare for accurate entropy modeling, freeze the encoder parameters (`g_a`, `h_a`). This stabilizes the latent representation.
+The encoder benchmark monitors device temperature and resets the selected U50 after the run. Run it on an exclusively allocated card. See [runtime usage](docs/runtime.md) for options and measurement boundaries.
 
-```python
-model.fix_encoder_flag(True)
-# ... Continue training (Decoder and Entropy parameters adapt) ...
-```
+Reference U50 throughput:
 
-### 5. PDF Training (Probability Modeling)
-Finally, switch to `RectifiedPDF` training. This replaces the `GaussianConditional` and `EntropyBottleneck` with discrete lookup tables compatible with hardware implementation.
+| Measurement boundary | Throughput |
+|---|---:|
+| Encoder, completed `.slc` output | 32.8–33.5 frames/s |
+| Decoder, reconstructed RGB downloaded | 29.4 frames/s |
+| Decoder, PNG output and RGB PSNR | 29.2 frames/s |
 
-**Note:** You must initialize the PDF tables before toggling the flag.
+Encoder measurements use four slots, batches of four frames and four CPU codec workers. Decoder measurements use six slots and four PNG workers. Implemented kernel clocks are recorded in `runtime/manifest.json`.
 
-```python
-model.init_pdf_table()
-model.toggle_pdf_training_flag(True)
-# ... Final fine-tuning ...
-```
+## Reference
 
-## Key API Functions
+[StreamLIC: A Lightweight Learned Image Compression Model for Stream Processing on FPGA](https://doi.org/10.1109/VCIP67698.2025.11396907), VCIP 2025.
 
-### `toggle_quantization(qat_flag: bool)`
-Switches the layers between floating-point mode and Quantization-Aware mode.
-*   `False`: Uses standard floating-point operations.
-*   `True`: Simulates int-arithmetic using Straight-Through Estimator (STE) rounding and clamped ranges.
+## License
 
-### `toggle_mask(flag: bool)`
-Toggles the application of the sparsity mask in `FGPConv_Q` layers.
-*   `True`: Weights are masked (multiplied by 0 or 1), enforcing sparsity.
-*   `False`: Weights are dense.
-
-### `set_all_mask()`
-Computes the sparsity mask for `FGPConv_Q` layers based on the magnitude of weights and input statistics gathered during forward passes. This should be called before enabling the mask permanently.
-
-### `fix_encoder_flag(flag: bool)`
-Freezes the gradients for the analysis transforms (`g_a`, `h_a`). This is essential during the final stages of QAT to ensure the latent codes generated by the encoder remain stable while the decoder and entropy model fine-tune.
-
-### `toggle_pdf_training_flag(flag: bool)`
-Enables the training of the `RectifiedPDF` modules.
-*   When `True`: The model calculates likelihoods using discrete lookup tables (`rectified_cdf_y`, `rectified_cdf_z`) rather than continuous Gaussian/Factorized models. This ensures that the training loss matches the bitstream length produced during integer inference.
-
-## Exporting for Inference
-
-After the training pipeline is complete, you can export the quantized parameters (integer weights, biases, shift values, and scale multipliers) suitable for implementation in C++, HLS, or Verilog.
-
-```python
-import torch
-
-# Ensure model is in eval mode and on CPU for export
-model.eval()
-model.cpu()
-
-# Export parameters
-quantized_params = model.export_quantized_parameters()
-
-# Example: Accessing parameters for a specific layer
-# print(quantized_params['g_a.0'].keys())
-# Output: dict_keys(['weight', 'bias', 'scale_param', 'scale_shift', ...])
-
-# Save to a file for hardware loading
-torch.save(quantized_params, "quantized_model_params.pth")
-```
-
-The exported dictionary contains:
-*   `weight`: Integer weights (`int32`).
-*   `bias`: Integer biases (`int32`).
-*   `scale_param` & `scale_shift`: Fixed-point multipliers used to rescale activations between layers to maintain precision.
-*   `mask`: (For sparse layers) The binary mask.
-
----
+The source code, model parameters and FPGA binaries in this repository are licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE) for noncommercial use.

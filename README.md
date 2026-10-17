@@ -1,31 +1,45 @@
-# StreamLIC: Quantized Model and U50 Demo
+# StreamLICDemo
 
-StreamLIC is a learned image compression system designed for stream processing on FPGA. This repository provides an Alveo U50 encoder and decoder, Linux host applications, matched model parameters and entropy tables, and the quantization-aware model used for training experiments.
+StreamLIC is a learned image compression system designed for stream processing on FPGA. This repository provides a runnable Alveo U50 demonstration, the quantization-aware training model, quantized parameters, and a Python integer reference implementation.
 
-The encoder produces `.slc` bitstreams from RGB images. Neural transforms and autoregressive parameter estimation execute on the FPGA; the host performs arithmetic encoding and bitstream assembly. The decoder combines host-side hyperlatent decoding with FPGA entropy decoding and image synthesis.
+The demo supports research and engineering evaluation through end-to-end image encoding and reconstruction, with bitrate, RGB PSNR, latency and throughput measurements. The U50 workflow uses the supplied host executables and FPGA images. The Python workflow supports model experiments, parameter export and golden reference generation.
 
-This demo supports research and engineering evaluation of StreamLIC on the Alveo U50. It provides an end-to-end workflow for encoding images, reconstructing them from compressed bitstreams, and measuring bitrate, reconstruction quality, latency and throughput. The supplied FPGA images and model parameters define the configuration used for these experiments.
+## Repository contents
 
-## Hardware and software
+| Path | Contents |
+|---|---|
+| `streamlic` | Command-line entry point for the U50 demo |
+| `runtime/bin/` | Linux x86-64 encoder and decoder executables |
+| `runtime/xclbin/` | Encoder and decoder FPGA images |
+| `runtime/parameters/` | Packed weights, scales, biases and entropy tables |
+| `runtime/manifest.json` | Platform configuration and kernel clocks |
+| `models/` | Quantized model archive and learned PDF parameters |
+| `training/` | QAT model, integer reference, parameter export and tests |
+| `scripts/` | Runtime benchmark script |
+| `examples/` | Synthetic RGB test image |
 
-| Item | Configuration |
+## U50 demo
+
+### Environment
+
+| Component | Configuration |
 |---|---|
 | Accelerator | AMD/Xilinx Alveo U50 |
 | Platform | `xilinx_u50_gen3x16_xdma_5_202210_1` |
 | Host | Linux x86-64 |
-| FPGA build toolchain | Vitis 2022.1 |
 | Reference XRT version | 2.13.466 |
+| FPGA image build toolchain | Vitis 2022.1 |
 | Input | 1280 × 768, 8-bit RGB PNG or binary P6 PPM |
 | Quantization | 12-bit weights and activations |
 | Entropy tables | 24-bit CDF precision |
 
-Install the U50 platform and a compatible XRT runtime before running the demo. The supplied host binaries require `libxrt_coreutil.so.2`, `libpng16.so.16`, the GNU C++ runtime and standard Linux libraries. The decoder also requires `libcrypto.so.1.1`; install the OpenSSL 1.1 runtime library on the host. Vitis is not needed to run the supplied FPGA images.
+Install the U50 platform and compatible XRT runtime. The host executables require `libxrt_coreutil.so.2`, `libpng16.so.16`, the GNU C++ runtime and standard Linux libraries. The decoder additionally requires `libcrypto.so.1.1` from OpenSSL 1.1. The supplied executables and xclbins run directly, without a Vitis build.
 
-## Quick start
+### Encode and reconstruct an image
 
 ```bash
-git clone https://github.com/heliosz616/StreamLIC-Quantized-Implementation.git
-cd StreamLIC-Quantized-Implementation
+git clone https://github.com/heliosz616/StreamLICDemo.git
+cd StreamLICDemo
 ./streamlic doctor
 mkdir -p outputs
 ./streamlic encode examples/test_pattern.png outputs/test.slc
@@ -33,29 +47,11 @@ mkdir -p outputs
   --original examples/test_pattern.png --report outputs/result.json
 ```
 
-The example is a synthetic test pattern. Prepare inputs at 1280 × 768. Encoding and decoding program different FPGA images and should run sequentially on a shared device.
+The encoder writes a `.slc` bitstream. The decoder writes the reconstructed PNG; `--original` and `--report` enable RGB PSNR and a JSON evaluation report. Use images prepared at 1280 × 768. Encoding and decoding program separate FPGA images and run sequentially on a shared card.
 
-Use `--device N` to select an XRT device and `--xrt-settings FILE` for a non-default XRT setup script. Each command provides `--help`. Use the supplied FPGA images with their matching encoder parameters, decoder parameters and CDF bundle.
+Select a device with `--device N`, or an XRT setup script with `--xrt-settings FILE`. See [runtime usage](docs/runtime.md) for command options and dependencies.
 
-## Repository layout
-
-```text
-streamlic                 Runtime command-line entry point
-runtime/bin/              Linux x86-64 host executables
-runtime/xclbin/           Encoder and decoder FPGA images
-runtime/parameters/       Matched weights, scales, biases and CDF tables
-runtime/manifest.json     Hardware, ABI and model configuration
-scripts/                  Runtime benchmark script
-models/                   Quantized model archive and PDF parameters
-training/                 QAT model, integer reference and parameter export
-examples/                 Synthetic RGB input
-```
-
-## Training and quantization
-
-See [training/README.md](training/README.md) for the PyTorch model, quantization controls, parameter export and golden reference workflow. The Python tools run independently of XRT using the supplied quantized model archive.
-
-## Evaluation
+### Batch evaluation
 
 For a directory containing at least 64 supported images:
 
@@ -65,17 +61,35 @@ For a directory containing at least 64 supported images:
   --original-dir images --report outputs/benchmark.json
 ```
 
-The encoder benchmark monitors device temperature and resets the selected U50 after the run. Run it on an exclusively allocated card. See [runtime usage](docs/runtime.md) for options and measurement boundaries.
+The encoder benchmark monitors temperature and resets the selected U50 after execution. Use an exclusively allocated card.
 
 Reference U50 throughput:
 
-| Measurement boundary | Throughput |
+| Measurement | Throughput |
 |---|---:|
 | Encoder, completed `.slc` output | 32.8–33.5 frames/s |
 | Decoder, reconstructed RGB downloaded | 29.4 frames/s |
 | Decoder, PNG output and RGB PSNR | 29.2 frames/s |
 
-Encoder measurements use four slots, batches of four frames and four CPU codec workers. Decoder measurements use six slots and four PNG workers. Implemented kernel clocks are recorded in `runtime/manifest.json`.
+The encoder configuration uses four slots, batches of four frames and four CPU codec workers. The decoder configuration uses six slots and four PNG workers. Kernel clocks are recorded in `runtime/manifest.json`.
+
+## Training and Python reference
+
+From the repository root, install the Python package in a Python 3.10+ environment:
+
+```bash
+python -m pip install -r training/requirements.txt
+python -m pip install -e training --no-deps
+```
+
+The [training and reference guide](training/README.md) covers:
+
+- Quantization-aware model controls and tensor conventions.
+- Quantized parameter and CDF export.
+- Integer encode/decode with the supplied weights.
+- Intermediate golden tensor generation and regression tests.
+
+The Python workflow runs independently of XRT. Its reference encoder and decoder implement W12/A12 arithmetic and the `.slc` bitstream format used by the demo.
 
 ## Reference
 
@@ -83,4 +97,4 @@ Encoder measurements use four slots, batches of four frames and four CPU codec w
 
 ## License
 
-The source code, model parameters and FPGA binaries in this repository are licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE) for noncommercial use.
+The source code, model parameters and FPGA binaries are licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE) for noncommercial use.

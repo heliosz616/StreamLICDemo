@@ -1,29 +1,33 @@
-# Training, quantization and golden reference
+# Training and golden reference
 
-`streamlic_q` contains the `ARLiteSparse_Q` PyTorch model and quantization utilities. It includes analysis/synthesis transforms, hyperprior transforms, sparse context prediction, learned quantization scales and entropy PDF fitting. It uses the CompressionModel base class from CompressAI.
+StreamLICDemo provides two Python packages: `streamlic_q` for quantization-aware model experiments, and `streamlic` for integer inference, entropy coding and parameter export. The model includes analysis/synthesis transforms, a hyperprior, sparse context prediction, learned quantization scales and entropy PDF fitting.
 
-## Installation and smoke test
+All commands below run from the repository root. See the [project README](../README.md) for the U50 demo.
+
+## Installation
 
 From the repository root, in a Python 3.10+ environment:
 
 ```bash
 python -m pip install -r training/requirements.txt
 python -m pip install -e training --no-deps
-python -m unittest discover -s training/tests -v
 ```
 
-The pinned requirements correspond to the CPU validation environment. Select an appropriate PyTorch build for GPU training. The smoke test checks forward/backward execution, sparse masks, quantization, PDF fitting and parameter export.
+The requirements specify PyTorch 2.10.0 and CompressAI 1.2.8. Select the appropriate PyTorch build for GPU training.
 
 ## Model interface
 
 ```python
+import torch
 from streamlic_q import ARLiteSparse_Q
 
 model = ARLiteSparse_Q()
 model.toggle_quantization(False)
 model.toggle_mask(False)
+images = torch.rand(1, 3, 64, 64) - 0.5
 result = model(images)
-# result contains x_hat and likelihoods for y and z.
+reconstruction = result["x_hat"]
+likelihoods = result["likelihoods"]
 ```
 
 Images use NCHW tensors. The analysis transform expects RGB values centered around zero (pixel values divided by 255, then minus 0.5); reconstruction adds 0.5 internally. Use spatial dimensions compatible with the model's downsampling, such as 64 × 64 for the smoke test. The FPGA runtime is separately fixed to 1280 × 768.
@@ -40,7 +44,7 @@ Model controls:
 | `toggle_pdf_training_flag(enabled)` | Select PDF fitting; enabling freezes the other model parameters |
 | `export_quantized_parameters()` | Return quantized layer parameter dictionaries |
 
-`export_quantized_parameters()` returns layer parameter dictionaries. FPGA deployment uses packed parameters with the matching hardware layout, scales and entropy tables, provided in `runtime/parameters/`.
+The U50 demo loads packed parameters and entropy tables from `runtime/parameters/`.
 
 ## Quantized model and parameter export
 
@@ -89,3 +93,11 @@ OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 python -m streamlic.reference.decode_cli \
   --bitstream outputs/reference.slc --model models/quant_weights_and_pdf.pt \
   --cdf runtime/parameters/cdf_p24.bin --output outputs/reference_decoded.png
 ```
+
+## Tests
+
+```bash
+python -m unittest discover -s training/tests -v
+```
+
+Tests cover model forward/backward execution, sparse masks, quantization, PDF fitting, tensor export, CDF generation, integer encode/decode consistency and golden tensor output.

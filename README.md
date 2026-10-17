@@ -2,18 +2,31 @@
 
 This repository provides a demo of **[StreamLIC: A Lightweight Learned Image Compression Model for Stream Processing on FPGA](https://doi.org/10.1109/VCIP67698.2025.11396907)**, VCIP 2025. It provides the quantization-aware model, parameter export tools, an integer golden reference, and a runnable Alveo U50 demo for research and engineering evaluation.
 
-The workflow covers model training and quantization, export of integer parameters and entropy tables, and image encoding and reconstruction. The supplied weights and FPGA images support evaluation of bitrate, RGB PSNR, latency and throughput.
+Demo weights, entropy tables, host executables and FPGA images are included. You can go directly to [Inference](#inference) to encode and reconstruct images using the supplied model. Training, quantization and parameter export are optional workflows for model experiments.
 
-## Training
-
-Clone the repository and install the Python package in a Python 3.10+ environment:
+## Getting started
 
 ```bash
 git clone https://github.com/heliosz616/StreamLICDemo.git
 cd StreamLICDemo
+```
+
+Choose the [Python integer reference](#python-integer-reference) for CPU inference and golden tensor generation, or the [Alveo U50 demo](#alveo-u50-demo) for FPGA inference. Both use the supplied weights and parameters.
+
+### Python tools
+
+For training, export or Python reference inference, install the package in a Python 3.10+ environment:
+
+```bash
 python -m pip install -r training/requirements.txt
 python -m pip install -e training --no-deps
 ```
+
+The U50 demo uses the prebuilt executables and requires only the runtime environment described [below](#environment).
+
+## Training (optional)
+
+Use the training model when developing or fine-tuning model parameters.
 
 `streamlic_q.ARLiteSparse_Q` implements the analysis/synthesis transforms, hyperprior and sparse context model. Its forward pass returns the reconstructed image and likelihoods for the main and hyperlatents, which can be used to form a rate-distortion training objective.
 
@@ -32,9 +45,9 @@ likelihoods = result["likelihoods"]
 
 Inputs are NCHW RGB tensors normalized as `pixel / 255 - 0.5`. Reconstruction includes the inverse offset. See the [training guide](training/README.md) for model controls and tensor conventions.
 
-## Quantization
+## Quantization (optional)
 
-The model supports 12-bit weights and activations, learned quantization scales, sparse masks and entropy PDF fitting.
+For model experiments, the QAT model supports 12-bit weights and activations, learned quantization scales, sparse masks and entropy PDF fitting.
 
 | Method | Purpose |
 |---|---|
@@ -45,9 +58,11 @@ The model supports 12-bit weights and activations, learned quantization scales, 
 | `init_pdf_table()` | Initialize learned PDF tables |
 | `toggle_pdf_training_flag(enabled)` | Select PDF fitting and freeze other model parameters when enabled |
 
-`models/quant_weights_and_pdf.pt` contains the supplied integer model parameters and learned PDF tables. The integer reference uses W12/A12 arithmetic and 24-bit CDF tables.
+The supplied `models/quant_weights_and_pdf.pt` is already quantized and includes learned PDF tables. The inference workflows use W12/A12 arithmetic and the provided 24-bit CDF tables.
 
-## Export
+## Export (optional)
+
+The demo already includes the model archive and packed runtime parameters. Use the export tools to inspect model tensors or regenerate entropy tables.
 
 For a trained QAT model, `model.export_quantized_parameters()` returns quantized layer parameter dictionaries.
 
@@ -66,7 +81,7 @@ The NumPy archive preserves tensor names, shapes and dtypes. CDF export produces
 
 ### Python integer reference
 
-Run encoding, reconstruction and golden tensor generation on a 128 × 128 center crop:
+After installing the [Python tools](#python-tools), run encoding, reconstruction and golden tensor generation on a 128 × 128 center crop:
 
 ```bash
 OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 python -m streamlic.reference.cli \
